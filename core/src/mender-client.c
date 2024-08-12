@@ -329,6 +329,20 @@ END:
     return ret;
 }
 
+char *
+mender_client_get_artifact_name(void) {
+
+    /* Return artifact name */
+    return mender_client_config.artifact_name;
+}
+
+char *
+mender_client_get_device_type(void) {
+
+    /* Return device type */
+    return mender_client_config.device_type;
+}
+
 mender_err_t
 mender_client_register_artifact_type(char *type,
                                      mender_err_t (*callback)(char *, char *, char *, cJSON *, char *, size_t, void *, size_t, size_t),
@@ -894,13 +908,6 @@ mender_client_update_work_function(void) {
     /* Check if deployment is available */
     if ((NULL == id) || (NULL == artifact_name) || (NULL == uri)) {
         mender_log_info("No deployment available");
-        goto END;
-    }
-
-    /* Check if artifact is already installed (should not occur) */
-    if (!strcmp(artifact_name, mender_client_config.artifact_name)) {
-        mender_log_error("Artifact is already installed");
-        mender_client_publish_deployment_status(id, MENDER_DEPLOYMENT_STATUS_ALREADY_INSTALLED);
         goto END;
     }
 

@@ -24,6 +24,7 @@
 extern "C" {
 #endif /* __cplusplus */
 
+#include "mender-http.h"
 #include "mender-utils.h"
 
 /**
@@ -51,6 +52,12 @@ mender_err_t mender_api_init(mender_api_config_t *config);
 mender_err_t mender_api_perform_authentication(void);
 
 /**
+ * @brief Retrieve authentification token from the mender-server
+ * @return Authentication token from the mender-server if the function succeeds, NULL otherwise
+ */
+char *mender_api_get_authentication_token(void);
+
+/**
  * @brief Check for deployments for the device from the mender-server
  * @param id ID of the deployment, if one is pending
  * @param artifact_name Artifact name of the deployment, if one is pending
@@ -75,65 +82,32 @@ mender_err_t mender_api_publish_deployment_status(char *id, mender_deployment_st
  */
 mender_err_t mender_api_download_artifact(char *uri, mender_err_t (*callback)(char *, cJSON *, char *, size_t, void *, size_t, size_t));
 
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_CONFIGURE
-#ifndef CONFIG_MENDER_CLIENT_CONFIGURE_STORAGE
-
 /**
- * @brief Download configure data of the device from the mender-server
- * @param configuration Mender configuration key/value pairs table, ends with a NULL/NULL element, NULL if not defined
+ * @brief HTTP callback used to handle text content
+ * @param event HTTP client event
+ * @param data Data received
+ * @param data_length Data length
+ * @param params Callback parameters
  * @return MENDER_OK if the function succeeds, error code otherwise
  */
-mender_err_t mender_api_download_configuration_data(mender_keystore_t **configuration);
-
-#endif /* CONFIG_MENDER_CLIENT_CONFIGURE_STORAGE */
+mender_err_t mender_api_http_text_callback(mender_http_client_event_t event, void *data, size_t data_length, void *params);
 
 /**
- * @brief Publish configure data of the device to the mender-server
- * @param configuration Mender configuration key/value pairs table, must end with a NULL/NULL element, NULL if not defined
+ * @brief HTTP callback used to handle artifact content
+ * @param event HTTP client event
+ * @param data Data received
+ * @param data_length Data length
+ * @param params Callback parameters
  * @return MENDER_OK if the function succeeds, error code otherwise
  */
-mender_err_t mender_api_publish_configuration_data(mender_keystore_t *configuration);
-
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_CONFIGURE */
-
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT
+mender_err_t mender_api_http_artifact_callback(mender_http_client_event_t event, void *data, size_t data_length, void *params);
 
 /**
- * @brief Connect the device and make it available to the server
- * @param callback Callback function to be invoked to perform the treatment of the data from the websocket
- * @param handle Connection handle
- * @return MENDER_OK if the function succeeds, error code otherwise
+ * @brief Print response error
+ * @param response HTTP response, NULL if not available
+ * @param status HTTP status
  */
-mender_err_t mender_api_troubleshoot_connect(mender_err_t (*callback)(void *, size_t), void **handle);
-
-/**
- * @brief Send binary data to the server
- * @param handle Connection handle
- * @param payload Payload to send
- * @param length Length of the payload
- * @return MENDER_OK if the function succeeds, error code otherwise
- */
-mender_err_t mender_api_troubleshoot_send(void *handle, void *payload, size_t length);
-
-/**
- * @brief Disconnect the device
- * @param handle Connection handle
- * @return MENDER_OK if the function succeeds, error code otherwise
- */
-mender_err_t mender_api_troubleshoot_disconnect(void *handle);
-
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT */
-
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_INVENTORY
-
-/**
- * @brief Publish inventory data of the device to the mender-server
- * @param inventory Mender inventory key/value pairs table, must end with a NULL/NULL element, NULL if not defined
- * @return MENDER_OK if the function succeeds, error code otherwise
- */
-mender_err_t mender_api_publish_inventory_data(mender_keystore_t *inventory);
-
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_INVENTORY */
+void mender_api_print_response_error(char *response, int status);
 
 /**
  * @brief Release mender API

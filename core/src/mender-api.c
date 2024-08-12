@@ -22,9 +22,6 @@
 #include "mender-http.h"
 #include "mender-log.h"
 #include "mender-tls.h"
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT
-#include "mender-websocket.h"
-#endif
 
 /**
  * @brief Paths of the mender-server APIs
@@ -32,10 +29,6 @@
 #define MENDER_API_PATH_POST_AUTHENTICATION_REQUESTS "/api/devices/v1/authentication/auth_requests"
 #define MENDER_API_PATH_GET_NEXT_DEPLOYMENT          "/api/devices/v1/deployments/device/deployments/next"
 #define MENDER_API_PATH_PUT_DEPLOYMENT_STATUS        "/api/devices/v1/deployments/device/deployments/%s/status"
-#define MENDER_API_PATH_GET_DEVICE_CONFIGURATION     "/api/devices/v1/deviceconfig/configuration"
-#define MENDER_API_PATH_PUT_DEVICE_CONFIGURATION     "/api/devices/v1/deviceconfig/configuration"
-#define MENDER_API_PATH_GET_DEVICE_CONNECT           "/api/devices/v1/deviceconnect/connect"
-#define MENDER_API_PATH_PUT_DEVICE_ATTRIBUTES        "/api/devices/v1/inventory/device/attributes"
 
 /**
  * @brief Mender API configuration
@@ -46,47 +39,6 @@ static mender_api_config_t mender_api_config;
  * @brief Authentication token
  */
 static char *mender_api_jwt = NULL;
-
-/**
- * @brief HTTP callback used to handle text content
- * @param event HTTP client event
- * @param data Data received
- * @param data_length Data length
- * @param params Callback parameters
- * @return MENDER_OK if the function succeeds, error code otherwise
- */
-static mender_err_t mender_api_http_text_callback(mender_http_client_event_t event, void *data, size_t data_length, void *params);
-
-/**
- * @brief HTTP callback used to handle artifact content
- * @param event HTTP client event
- * @param data Data received
- * @param data_length Data length
- * @param params Callback parameters
- * @return MENDER_OK if the function succeeds, error code otherwise
- */
-static mender_err_t mender_api_http_artifact_callback(mender_http_client_event_t event, void *data, size_t data_length, void *params);
-
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT
-
-/**
- * @brief Websocket callback used to handle websocket data
- * @param event Websocket client event
- * @param data Data received
- * @param data_length Data length
- * @param params Callback parameters
- * @return MENDER_OK if the function succeeds, error code otherwise
- */
-static mender_err_t mender_api_websocket_callback(mender_websocket_client_event_t event, void *data, size_t data_length, void *params);
-
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT */
-
-/**
- * @brief Print response error
- * @param response HTTP response, NULL if not available
- * @param status HTTP status
- */
-static void mender_api_print_response_error(char *response, int status);
 
 mender_err_t
 mender_api_init(mender_api_config_t *config) {
@@ -107,13 +59,6 @@ mender_api_init(mender_api_config_t *config) {
         mender_log_error("Unable to initialize HTTP");
         return ret;
     }
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT
-    mender_websocket_config_t mender_websocket_config = { .host = mender_api_config.host };
-    if (MENDER_OK != (ret = mender_websocket_init(&mender_websocket_config))) {
-        mender_log_error("Unable to initialize websocket");
-        return ret;
-    }
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT */
 
     return ret;
 }
@@ -233,6 +178,13 @@ END:
     }
 
     return ret;
+}
+
+char *
+mender_api_get_authentication_token(void) {
+
+    /* Return authentication token */
+    return mender_api_jwt;
 }
 
 mender_err_t
@@ -439,298 +391,7 @@ END:
     return ret;
 }
 
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_CONFIGURE
-#ifndef CONFIG_MENDER_CLIENT_CONFIGURE_STORAGE
-
 mender_err_t
-mender_api_download_configuration_data(mender_keystore_t **configuration) {
-
-    assert(NULL != configuration);
-    mender_err_t ret;
-    char        *response = NULL;
-    int          status   = 0;
-
-    /* Perform HTTP request */
-    if (MENDER_OK
-        != (ret = mender_http_perform(mender_api_jwt,
-                                      MENDER_API_PATH_GET_DEVICE_CONFIGURATION,
-                                      MENDER_HTTP_GET,
-                                      NULL,
-                                      NULL,
-                                      &mender_api_http_text_callback,
-                                      (void *)&response,
-                                      &status))) {
-        mender_log_error("Unable to perform HTTP request");
-        goto END;
-    }
-
-    /* Treatment depending of the status */
-    if (200 == status) {
-        cJSON *json_response = cJSON_Parse(response);
-        if (NULL == json_response) {
-            mender_log_error("Unable to set configuration");
-            goto END;
-        }
-        if (MENDER_OK != (ret = mender_utils_keystore_from_json(configuration, json_response))) {
-            mender_log_error("Unable to set configuration");
-            cJSON_Delete(json_response);
-            goto END;
-        }
-        cJSON_Delete(json_response);
-    } else {
-        mender_api_print_response_error(response, status);
-        ret = MENDER_FAIL;
-    }
-
-END:
-
-    /* Release memory */
-    if (NULL != response) {
-        free(response);
-    }
-
-    return ret;
-}
-
-#endif /* CONFIG_MENDER_CLIENT_CONFIGURE_STORAGE */
-
-mender_err_t
-mender_api_publish_configuration_data(mender_keystore_t *configuration) {
-
-    mender_err_t ret;
-    cJSON       *json_configuration = NULL;
-    char        *payload            = NULL;
-    char        *response           = NULL;
-    int          status             = 0;
-
-    /* Format payload */
-    if (MENDER_OK != (ret = mender_utils_keystore_to_json(configuration, &json_configuration))) {
-        mender_log_error("Unable to format payload");
-        goto END;
-    }
-    if (NULL == (payload = cJSON_PrintUnformatted(json_configuration))) {
-        mender_log_error("Unable to allocate memory");
-        ret = MENDER_FAIL;
-        goto END;
-    }
-
-    /* Perform HTTP request */
-    if (MENDER_OK
-        != (ret = mender_http_perform(mender_api_jwt,
-                                      MENDER_API_PATH_PUT_DEVICE_CONFIGURATION,
-                                      MENDER_HTTP_PUT,
-                                      payload,
-                                      NULL,
-                                      &mender_api_http_text_callback,
-                                      (void *)&response,
-                                      &status))) {
-        mender_log_error("Unable to perform HTTP request");
-        goto END;
-    }
-
-    /* Treatment depending of the status */
-    if (204 == status) {
-        /* No response expected */
-        ret = MENDER_OK;
-    } else {
-        mender_api_print_response_error(response, status);
-        ret = MENDER_FAIL;
-    }
-
-END:
-
-    /* Release memory */
-    if (NULL != response) {
-        free(response);
-    }
-    if (NULL != payload) {
-        free(payload);
-    }
-    if (NULL != json_configuration) {
-        cJSON_Delete(json_configuration);
-    }
-
-    return ret;
-}
-
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_CONFIGURE */
-
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT
-
-mender_err_t
-mender_api_troubleshoot_connect(mender_err_t (*callback)(void *, size_t), void **handle) {
-
-    mender_err_t ret;
-
-    /* Open websocket connection */
-    if (MENDER_OK != (ret = mender_websocket_connect(mender_api_jwt, MENDER_API_PATH_GET_DEVICE_CONNECT, &mender_api_websocket_callback, callback, handle))) {
-        mender_log_error("Unable to open websocket connection");
-        goto END;
-    }
-
-END:
-
-    return ret;
-}
-
-mender_err_t
-mender_api_troubleshoot_send(void *handle, void *payload, size_t length) {
-
-    mender_err_t ret;
-
-    /* Send data over websocket connection */
-    if (MENDER_OK != (ret = mender_websocket_send(handle, payload, length))) {
-        mender_log_error("Unable to send data over websocket connection");
-        goto END;
-    }
-
-END:
-
-    return ret;
-}
-
-mender_err_t
-mender_api_troubleshoot_disconnect(void *handle) {
-
-    mender_err_t ret;
-
-    /* Close websocket connection */
-    if (MENDER_OK != (ret = mender_websocket_disconnect(handle))) {
-        mender_log_error("Unable to close websocket connection");
-        goto END;
-    }
-
-END:
-
-    return ret;
-}
-
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT */
-
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_INVENTORY
-
-mender_err_t
-mender_api_publish_inventory_data(mender_keystore_t *inventory) {
-
-    mender_err_t ret;
-    char        *payload  = NULL;
-    char        *response = NULL;
-    int          status   = 0;
-
-    /* Format payload */
-    cJSON *object = cJSON_CreateArray();
-    if (NULL == object) {
-        mender_log_error("Unable to allocate memory");
-        ret = MENDER_FAIL;
-        goto END;
-    }
-    cJSON *item = cJSON_CreateObject();
-    if (NULL == item) {
-        mender_log_error("Unable to allocate memory");
-        ret = MENDER_FAIL;
-        goto END;
-    }
-    cJSON_AddStringToObject(item, "name", "artifact_name");
-    cJSON_AddStringToObject(item, "value", mender_api_config.artifact_name);
-    cJSON_AddItemToArray(object, item);
-    item = cJSON_CreateObject();
-    if (NULL == item) {
-        mender_log_error("Unable to allocate memory");
-        ret = MENDER_FAIL;
-        goto END;
-    }
-    cJSON_AddStringToObject(item, "name", "rootfs-image.version");
-    cJSON_AddStringToObject(item, "value", mender_api_config.artifact_name);
-    cJSON_AddItemToArray(object, item);
-    item = cJSON_CreateObject();
-    if (NULL == item) {
-        mender_log_error("Unable to allocate memory");
-        ret = MENDER_FAIL;
-        goto END;
-    }
-    cJSON_AddStringToObject(item, "name", "device_type");
-    cJSON_AddStringToObject(item, "value", mender_api_config.device_type);
-    cJSON_AddItemToArray(object, item);
-    if (NULL != inventory) {
-        size_t index = 0;
-        while ((NULL != inventory[index].name) && (NULL != inventory[index].value)) {
-            if (NULL == (item = cJSON_CreateObject())) {
-                mender_log_error("Unable to allocate memory");
-                ret = MENDER_FAIL;
-                goto END;
-            }
-            cJSON_AddStringToObject(item, "name", inventory[index].name);
-            cJSON_AddStringToObject(item, "value", inventory[index].value);
-            cJSON_AddItemToArray(object, item);
-            index++;
-        }
-    }
-    if (NULL == (payload = cJSON_PrintUnformatted(object))) {
-        mender_log_error("Unable to allocate memory");
-        ret = MENDER_FAIL;
-        goto END;
-    }
-
-    /* Perform HTTP request */
-    if (MENDER_OK
-        != (ret = mender_http_perform(mender_api_jwt,
-                                      MENDER_API_PATH_PUT_DEVICE_ATTRIBUTES,
-                                      MENDER_HTTP_PUT,
-                                      payload,
-                                      NULL,
-                                      &mender_api_http_text_callback,
-                                      (void *)&response,
-                                      &status))) {
-        mender_log_error("Unable to perform HTTP request");
-        goto END;
-    }
-
-    /* Treatment depending of the status */
-    if (200 == status) {
-        /* No response expected */
-        ret = MENDER_OK;
-    } else {
-        mender_api_print_response_error(response, status);
-        ret = MENDER_FAIL;
-    }
-
-END:
-
-    /* Release memory */
-    if (NULL != response) {
-        free(response);
-    }
-    if (NULL != payload) {
-        free(payload);
-    }
-    if (NULL != object) {
-        cJSON_Delete(object);
-    }
-
-    return ret;
-}
-
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_INVENTORY */
-
-mender_err_t
-mender_api_exit(void) {
-
-    /* Release all modules */
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT
-    mender_websocket_exit();
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT */
-    mender_http_exit();
-
-    /* Release memory */
-    if (NULL != mender_api_jwt) {
-        free(mender_api_jwt);
-        mender_api_jwt = NULL;
-    }
-
-    return MENDER_OK;
-}
-
-static mender_err_t
 mender_api_http_text_callback(mender_http_client_event_t event, void *data, size_t data_length, void *params) {
 
     assert(NULL != params);
@@ -778,7 +439,7 @@ mender_api_http_text_callback(mender_http_client_event_t event, void *data, size
     return ret;
 }
 
-static mender_err_t
+mender_err_t
 mender_api_http_artifact_callback(mender_http_client_event_t event, void *data, size_t data_length, void *params) {
 
     assert(NULL != params);
@@ -838,55 +499,7 @@ mender_api_http_artifact_callback(mender_http_client_event_t event, void *data, 
     return ret;
 }
 
-#ifdef CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT
-
-static mender_err_t
-mender_api_websocket_callback(mender_websocket_client_event_t event, void *data, size_t data_length, void *params) {
-
-    assert(NULL != params);
-    mender_err_t (*callback)(void *, size_t) = params;
-    mender_err_t ret                         = MENDER_OK;
-
-    /* Treatment depending of the event */
-    switch (event) {
-        case MENDER_WEBSOCKET_EVENT_CONNECTED:
-            /* Nothing to do */
-            mender_log_info("Troubleshoot client connected");
-            break;
-        case MENDER_WEBSOCKET_EVENT_DATA_RECEIVED:
-            /* Check input data */
-            if ((NULL == data) || (0 == data_length)) {
-                mender_log_error("Invalid data received");
-                ret = MENDER_FAIL;
-                break;
-            }
-            /* Process input data */
-            if (MENDER_OK != (ret = callback(data, data_length))) {
-                mender_log_error("Unable to process data");
-                break;
-            }
-            break;
-        case MENDER_WEBSOCKET_EVENT_DISCONNECTED:
-            /* Nothing to do */
-            mender_log_info("Troubleshoot client disconnected");
-            break;
-        case MENDER_WEBSOCKET_EVENT_ERROR:
-            /* Websocket connection fails */
-            mender_log_error("An error occurred");
-            ret = MENDER_FAIL;
-            break;
-        default:
-            /* Should not occur */
-            ret = MENDER_FAIL;
-            break;
-    }
-
-    return ret;
-}
-
-#endif /* CONFIG_MENDER_CLIENT_ADD_ON_TROUBLESHOOT */
-
-static void
+void
 mender_api_print_response_error(char *response, int status) {
 
     char *desc;
@@ -912,4 +525,19 @@ mender_api_print_response_error(char *response, int status) {
     } else {
         mender_log_error("Unknown error occurred, status=%d", status);
     }
+}
+
+mender_err_t
+mender_api_exit(void) {
+
+    /* Release all modules */
+    mender_http_exit();
+
+    /* Release memory */
+    if (NULL != mender_api_jwt) {
+        free(mender_api_jwt);
+        mender_api_jwt = NULL;
+    }
+
+    return MENDER_OK;
 }
